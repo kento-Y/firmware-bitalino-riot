@@ -902,8 +902,8 @@ void loop() {
                 while(*pHtml != '\0')
                 {
                   pHtml += GrabNextParam(pHtml, StringBuffer);
-                  //Serial.print("Param found: ");
-                  //Serial.println(StringBuffer);
+                  // Serial.print("Param found: ");
+                  // Serial.println(StringBuffer);
 
                   // Parsing params withing the submitted URL
                   if(!strncmp("ssid", StringBuffer, 4))
@@ -963,9 +963,16 @@ void loop() {
 
                   if(!strncmp("ip", StringBuffer, 2))
                   {
-                    Rank = atoi(&(StringBuffer[2]));
+                    Rank = atoi(&(StringBuffer[3]));
                     Index = SkipToValue(StringBuffer);
                     LocalIP[Rank-1] = atoi(&(StringBuffer[Index]));
+                  }
+
+                  if(!strncmp("gw", StringBuffer, 2))
+                  {
+                    Rank = atoi(&(StringBuffer[2]));
+                    Index = SkipToValue(StringBuffer);
+                    GatewayIP[Rank-1] = atoi(&(StringBuffer[Index]));
                   }
 
                   if(!strncmp("dip", StringBuffer, 3))
@@ -975,16 +982,9 @@ void loop() {
                     DestIP[Rank-1] = atoi(&(StringBuffer[Index]));
                   }
 
-                  if(!strncmp("gw", StringBuffer, 2))
-                  {
-                    Rank = atoi(&(StringBuffer[1]));
-                    Index = SkipToValue(StringBuffer);
-                    GatewayIP[Rank-1] = atoi(&(StringBuffer[Index]));
-                  }
-
                   if(!strncmp("msk", StringBuffer, 3))
                   {
-                    Rank = atoi(&(StringBuffer[1]));
+                    Rank = atoi(&(StringBuffer[3]));
                     Index = SkipToValue(StringBuffer);
                     SubnetMask[Rank-1] = atoi(&(StringBuffer[Index]));
                   }
@@ -1154,7 +1154,7 @@ void SendConfigWebPage(void)
   sprintf(StringBuffer,"<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"ipi4\" value=\"%u\"></td></tr>\0", LocalIP[3]);
   client.println(StringBuffer);
 
-  sprintf(StringBuffer, "<tr><td>DEST IP:</td><td><input type=\"text\" size=\"1\" maxlength=\"3\" name=\"dip1\" value=\"%u\">.\0", DestIP[0]);
+  sprintf(StringBuffer, "<tr><td>DEST IP:</td><td><input type=\"text\" size=\"3\" maxlength=\"3\" name=\"dip1\" value=\"%u\">.\0", DestIP[0]);
   client.println(StringBuffer);
   sprintf(StringBuffer, "<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"dip2\" value=\"%u\">.\0", DestIP[1]);
   client.println(StringBuffer);
@@ -1162,7 +1162,7 @@ void SendConfigWebPage(void)
   client.println(StringBuffer);
   sprintf(StringBuffer, "<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"dip4\" value=\"%u\"></td></tr>\0", DestIP[3]);
   client.println(StringBuffer);
-  sprintf(StringBuffer, "<tr><td>GATEWAY:</td><td><input type=\"text\" size=\"1\" maxlength=\"3\" name=\"gw1\" value=\"%u\">.\0", GatewayIP[0]);
+  sprintf(StringBuffer, "<tr><td>GATEWAY:</td><td><input type=\"text\" size=\"3\" maxlength=\"3\" name=\"gw1\" value=\"%u\">.\0", GatewayIP[0]);
   client.println(StringBuffer);
   sprintf(StringBuffer, "<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"gw2\" value=\"%u\">.\0", GatewayIP[1]);
   client.println(StringBuffer);
@@ -1170,7 +1170,7 @@ void SendConfigWebPage(void)
   client.println(StringBuffer);
   sprintf(StringBuffer, "<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"gw4\" value=\"%u\"></td></tr>\0", GatewayIP[3]);
   client.println(StringBuffer);
-  sprintf(StringBuffer, "<tr><td>MASK:</td><td><input type=\"text\" size=\"1\" maxlength=\"3\" name=\"msk1\" value=\"%u\">.\0", SubnetMask[0]);
+  sprintf(StringBuffer, "<tr><td>MASK:</td><td><input type=\"text\" size=\"3\" maxlength=\"3\" name=\"msk1\" value=\"%u\">.\0", SubnetMask[0]);
   client.println(StringBuffer);
   sprintf(StringBuffer, "<input type=\"text\" size=\"3\" maxlength=\"3\" name=\"msk2\" value=\"%u\">.\0", SubnetMask[1]);
   client.println(StringBuffer);
@@ -2038,23 +2038,38 @@ void ProcessSerial(void)
 
 void LoadParams(void)
 {
+  int32_t readStatus;
   // Check if file exists
-  if(!SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_READ))
+  readStatus = SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_READ);
+  if(readStatus != SL_FS_OK)
   {
     SerFlash.close();
     // Creates the file
     Serial.println("Param File not found");
-    if(SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_CREATE(512, _FS_FILE_OPEN_FLAG_COMMIT)))
+    SerFlash.begin();
+    SerFlash.del(PARAMS_FILENAME);
+    readStatus = SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_CREATE(512, _FS_FILE_OPEN_FLAG_COMMIT));
+    if (readStatus != SL_FS_OK)
+      {
+      Serial.print("Error creating file ");
+      Serial.print(PARAMS_FILENAME);
+      Serial.print(", error code: ");
+      Serial.println(SerFlash.lastErrorString());
+      SerFlash.close();// close the file
+    }
+    else
     {
-      // Re open in write mode
+      Serial.print("File created: ");
+      Serial.println(PARAMS_FILENAME);
       Serial.println("Param File created and opened for writing");
       Serial.println("Restoring defaults");
       RestoreDefaults();
       SerFlash.close();
-      Serial.println("Please Reboot");
-      while(1);
-      // REBOOT NEEDED 
+//      Serial.println("Please Reboot");
+//      while(1);
+//      // REBOOT NEEDED 
     }
+    
   }
   else
   {
@@ -2066,7 +2081,8 @@ void LoadParams(void)
     {
       Serial.println("Restoring defaults");
       SerFlash.close();
-      SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_WRITE);
+      SerFlash.del(PARAMS_FILENAME);
+      SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_CREATE(512, _FS_FILE_OPEN_FLAG_COMMIT));
       RestoreDefaults();
       SerFlash.close();
       Serial.println("Reboot Device");
@@ -2153,10 +2169,14 @@ void LoadParams(void)
 void SaveFlashPrefs(void)
 {
   int writeStatus;
+  int32_t readStatus;
 
   // File was opened for Read so far, re open in write mode
   SerFlash.close();
-  if(SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_WRITE))
+  SerFlash.begin();
+  SerFlash.del(PARAMS_FILENAME);
+  readStatus = SerFlash.open(PARAMS_FILENAME, FS_MODE_OPEN_CREATE(512, _FS_FILE_OPEN_FLAG_COMMIT));
+  if (readStatus == SL_FS_OK)
   {
     Serial.println("Saving prefs in FLASH");
 
