@@ -16,7 +16,9 @@
  and webserver
  
  */
-
+#include <ros.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/MagneticField.h>
 #include <stdio.h>
 #include <strings.h>
 #include <SPI.h>
@@ -34,6 +36,13 @@
 #include "LSM9DS1.h"
 #include "osc.h"
 #include "web.h"
+
+// ROS setting 
+ros::NodeHandle nh;
+sensor_msgs::Imu imu_msg;
+sensor_msgs::MagneticField mag_msg;
+ros::Publisher imu_publisher("bitalino_imu", &imu_msg);
+ros::Publisher mag_publisher("bitalino_mag", &mag_msg);
 
 /////////////////////////////////////////////////////////////
 // DEFAULT parameters
@@ -167,12 +176,12 @@ float abias[3] = { 0., 0., 0.};
 float gbias[3] = { 0., 0., 0.};
 float mbias[3] = { 0., 0., 0.};
 
-float gRes, aRes, mRes;		// Resolution = Sensor range / 2^15
+float gRes, aRes, mRes;    // Resolution = Sensor range / 2^15
 float a_x, a_y, a_z, g_x, g_y, g_z, m_x, m_y, m_z; // variables to hold latest sensor data values
 float gyro_norm; // used to tweak Beta
 float mag_nobias[3];
 
-float q1 = 1.0f, q2 = 0.0f, q3 = 0.0f, q4 = 0.0f;	// quaternion of sensor frame relative to auxiliary frame
+float q1 = 1.0f, q2 = 0.0f, q3 = 0.0f, q4 = 0.0f; // quaternion of sensor frame relative to auxiliary frame
 
 /////////////////////////////////////////////////////////////////
 // Serial port message / buffers / temporary strings
@@ -331,9 +340,9 @@ void setup() {
   delay(40);
   SetLedColor(0,1,0);
   
-  // Scaling to obtain gs and deg/s 	
+  // Scaling to obtain gs and deg/s   
   // Must match the init settings of the LSM9DS1
-  gRes = 2000.0 / 32768.0; 	// +- 2000 deg/s
+  gRes = 2000.0 / 32768.0;  // +- 2000 deg/s
   aRes = 8.0 / 32768.0;         // +- 8g
   mRes = 2.0 / 32768.0;         // +- 2 gauss
 
@@ -415,6 +424,17 @@ void setup() {
   
   if(ConfigModeAllowCounter)
     Serial.println("Calibration enabled for now");
+
+  Serial.println("====================================");
+  Serial.print("ConfigurationMode: ");
+  Serial.println(ConfigurationMode);
+  Serial.print("StandAloneMode: ");
+  Serial.println(StandAloneMode);
+  Serial.println("====================================");
+
+  nh.initNode();
+  nh.advertise(imu_publisher);
+  nh.advertise(mag_publisher);
 }
 
 
@@ -696,6 +716,28 @@ void loop() {
       yaw   *= 180.0f / PI; 
       yaw   -= Declination; 
       roll  *= 180.0f / PI;
+
+
+      // ROS publish
+      imu_msg.linear_acceleration.x = a_x;
+      imu_msg.linear_acceleration.y = a_y;
+      imu_msg.linear_acceleration.z = a_z;
+      
+      imu_msg.angular_velocity.x = g_x;
+      imu_msg.angular_velocity.y = g_y;
+      imu_msg.angular_velocity.z = g_z;
+
+      imu_msg.orientation.w = q1;
+      imu_msg.orientation.x = q2;
+      imu_msg.orientation.y = q3;
+      imu_msg.orientation.z = q4;
+
+      mag_msg.magnetic_field.x = m_x;
+      mag_msg.magnetic_field.y = m_y;
+      mag_msg.magnetic_field.z = m_z;
+
+      imu_publisher.publish(&imu_msg);
+      mag_publisher.publish(&mag_msg);
 
       // Update sensors data in the main OSC message
       char *pData = RawSensors.pData;
@@ -1068,6 +1110,7 @@ void loop() {
       } 
     }
   }
+  nh.spinOnce(); 
 }
 
 
@@ -1329,102 +1372,102 @@ void printCurrentNet() {
 // which fuses acceleration, rotation rate, and magnetic moments to produce a quaternion-based estimate of absolute
 // device orientation -- which can be converted to yaw, pitch, and roll. 
 void MadgwickAHRSupdate(float ax, float ay, float az, float gx, float gy, float gz, float mx, float my, float mz) {
-	float recipNorm;
-	float s0, s1, s2, s3;
-	float qDot1, qDot2, qDot3, qDot4;
-	float hx, hy;
-	float _2q1mx, _2q1my, _2q1mz, _2q2mx, _2bx, _2bz, _4bx, _4bz, _2q1, _2q2, _2q3, _2q4, _2q1q3, _2q3q4, q1q1, q1q2, q1q3, q1q4, q2q2, q2q3, q2q4, q3q3, q3q4, q4q4;
+  float recipNorm;
+  float s0, s1, s2, s3;
+  float qDot1, qDot2, qDot3, qDot4;
+  float hx, hy;
+  float _2q1mx, _2q1my, _2q1mz, _2q2mx, _2bx, _2bz, _4bx, _4bz, _2q1, _2q2, _2q3, _2q4, _2q1q3, _2q3q4, q1q1, q1q2, q1q3, q1q4, q2q2, q2q3, q2q4, q3q3, q3q4, q4q4;
 
-	// Use IMU algorithm if magnetometer measurement invalid (avoids NaN in magnetometer normalisation)
-	if((mx == 0.0f) && (my == 0.0f) && (mz == 0.0f)) {
+  // Use IMU algorithm if magnetometer measurement invalid (avoids NaN in magnetometer normalisation)
+  if((mx == 0.0f) && (my == 0.0f) && (mz == 0.0f)) {
           Serial.println("Mag data invalid - no update");
-	  return;
-	}
+    return;
+  }
 
-	// Rate of change of quaternion from gyroscope
-	qDot1 = 0.5f * (-q2 * gx - q3 * gy - q4 * gz);
-	qDot2 = 0.5f * (q1 * gx + q3 * gz - q4 * gy);
-	qDot3 = 0.5f * (q1 * gy - q2 * gz + q4 * gx);
-	qDot4 = 0.5f * (q1 * gz + q2 * gy - q3 * gx);
+  // Rate of change of quaternion from gyroscope
+  qDot1 = 0.5f * (-q2 * gx - q3 * gy - q4 * gz);
+  qDot2 = 0.5f * (q1 * gx + q3 * gz - q4 * gy);
+  qDot3 = 0.5f * (q1 * gy - q2 * gz + q4 * gx);
+  qDot4 = 0.5f * (q1 * gz + q2 * gy - q3 * gx);
 
-	// Compute feedback only if accelerometer measurement valid (avoids NaN in accelerometer normalisation)
-	if(!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
+  // Compute feedback only if accelerometer measurement valid (avoids NaN in accelerometer normalisation)
+  if(!((ax == 0.0f) && (ay == 0.0f) && (az == 0.0f))) {
 
-		// Normalise accelerometer measurement
-		recipNorm = AccurateInvSqrt(ax * ax + ay * ay + az * az);
+    // Normalise accelerometer measurement
+    recipNorm = AccurateInvSqrt(ax * ax + ay * ay + az * az);
                 //recipNorm = 1. / sqrt(ax * ax + ay * ay + az * az);
-		ax *= recipNorm;
-		ay *= recipNorm;
-		az *= recipNorm;   
+    ax *= recipNorm;
+    ay *= recipNorm;
+    az *= recipNorm;   
 
-		// Normalise magnetometer measurement
-		recipNorm = AccurateInvSqrt(mx * mx + my * my + mz * mz);
+    // Normalise magnetometer measurement
+    recipNorm = AccurateInvSqrt(mx * mx + my * my + mz * mz);
                 //recipNorm = 1. / sqrt(mx * mx + my * my + mz * mz);
-		mx *= recipNorm;
-		my *= recipNorm;
-		mz *= recipNorm;
+    mx *= recipNorm;
+    my *= recipNorm;
+    mz *= recipNorm;
 
-		// Auxiliary variables to avoid repeated arithmetic
-		_2q1mx = 2.0f * q1 * mx;
-		_2q1my = 2.0f * q1 * my;
-		_2q1mz = 2.0f * q1 * mz;
-		_2q2mx = 2.0f * q2 * mx;
-		_2q1 = 2.0f * q1;
-		_2q2 = 2.0f * q2;
-		_2q3 = 2.0f * q3;
-		_2q4 = 2.0f * q4;
-		_2q1q3 = 2.0f * q1 * q3;
-		_2q3q4 = 2.0f * q3 * q4;
-		q1q1 = q1 * q1;
-		q1q2 = q1 * q2;
-		q1q3 = q1 * q3;
-		q1q4 = q1 * q4;
-		q2q2 = q2 * q2;
-		q2q3 = q2 * q3;
-		q2q4 = q2 * q4;
-		q3q3 = q3 * q3;
-		q3q4 = q3 * q4;
-		q4q4 = q4 * q4;
+    // Auxiliary variables to avoid repeated arithmetic
+    _2q1mx = 2.0f * q1 * mx;
+    _2q1my = 2.0f * q1 * my;
+    _2q1mz = 2.0f * q1 * mz;
+    _2q2mx = 2.0f * q2 * mx;
+    _2q1 = 2.0f * q1;
+    _2q2 = 2.0f * q2;
+    _2q3 = 2.0f * q3;
+    _2q4 = 2.0f * q4;
+    _2q1q3 = 2.0f * q1 * q3;
+    _2q3q4 = 2.0f * q3 * q4;
+    q1q1 = q1 * q1;
+    q1q2 = q1 * q2;
+    q1q3 = q1 * q3;
+    q1q4 = q1 * q4;
+    q2q2 = q2 * q2;
+    q2q3 = q2 * q3;
+    q2q4 = q2 * q4;
+    q3q3 = q3 * q3;
+    q3q4 = q3 * q4;
+    q4q4 = q4 * q4;
 
-		// Reference direction of Earth's magnetic field
-		hx = mx * q1q1 - _2q1my * q4 + _2q1mz * q3 + mx * q2q2 + _2q2 * my * q3 + _2q2 * mz * q4 - mx * q3q3 - mx * q4q4;
-		hy = _2q1mx * q4 + my * q1q1 - _2q1mz * q2 + _2q2mx * q3 - my * q2q2 + my * q3q3 + _2q3 * mz * q4 - my * q4q4;
-		_2bx = sqrt(hx * hx + hy * hy);
-		_2bz = -_2q1mx * q3 + _2q1my * q2 + mz * q1q1 + _2q2mx * q4 - mz * q2q2 + _2q3 * my * q4 - mz * q3q3 + mz * q4q4;
-		_4bx = 2.0f * _2bx;
-		_4bz = 2.0f * _2bz;
+    // Reference direction of Earth's magnetic field
+    hx = mx * q1q1 - _2q1my * q4 + _2q1mz * q3 + mx * q2q2 + _2q2 * my * q3 + _2q2 * mz * q4 - mx * q3q3 - mx * q4q4;
+    hy = _2q1mx * q4 + my * q1q1 - _2q1mz * q2 + _2q2mx * q3 - my * q2q2 + my * q3q3 + _2q3 * mz * q4 - my * q4q4;
+    _2bx = sqrt(hx * hx + hy * hy);
+    _2bz = -_2q1mx * q3 + _2q1my * q2 + mz * q1q1 + _2q2mx * q4 - mz * q2q2 + _2q3 * my * q4 - mz * q3q3 + mz * q4q4;
+    _4bx = 2.0f * _2bx;
+    _4bz = 2.0f * _2bz;
 
-		// Gradient decent algorithm corrective step
-		s0 = -_2q3 * (2.0f * q2q4 - _2q1q3 - ax) + _2q2 * (2.0f * q1q2 + _2q3q4 - ay) - _2bz * q3 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q4 + _2bz * q2) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q3 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
-		s1 = _2q4 * (2.0f * q2q4 - _2q1q3 - ax) + _2q1 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q2 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + _2bz * q4 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q3 + _2bz * q1) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q4 - _4bz * q2) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
-		s2 = -_2q1 * (2.0f * q2q4 - _2q1q3 - ax) + _2q4 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q3 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + (-_4bx * q3 - _2bz * q1) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q2 + _2bz * q4) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q1 - _4bz * q3) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
-		s3 = _2q2 * (2.0f * q2q4 - _2q1q3 - ax) + _2q3 * (2.0f * q1q2 + _2q3q4 - ay) + (-_4bx * q4 + _2bz * q2) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q1 + _2bz * q3) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q2 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
-		recipNorm = AccurateInvSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3); // normalise step magnitude
-		s0 *= recipNorm;
-		s1 *= recipNorm;
-		s2 *= recipNorm;
-		s3 *= recipNorm;
+    // Gradient decent algorithm corrective step
+    s0 = -_2q3 * (2.0f * q2q4 - _2q1q3 - ax) + _2q2 * (2.0f * q1q2 + _2q3q4 - ay) - _2bz * q3 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q4 + _2bz * q2) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q3 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+    s1 = _2q4 * (2.0f * q2q4 - _2q1q3 - ax) + _2q1 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q2 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + _2bz * q4 * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q3 + _2bz * q1) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q4 - _4bz * q2) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+    s2 = -_2q1 * (2.0f * q2q4 - _2q1q3 - ax) + _2q4 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q3 * (1 - 2.0f * q2q2 - 2.0f * q3q3 - az) + (-_4bx * q3 - _2bz * q1) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q2 + _2bz * q4) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q1 - _4bz * q3) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+    s3 = _2q2 * (2.0f * q2q4 - _2q1q3 - ax) + _2q3 * (2.0f * q1q2 + _2q3q4 - ay) + (-_4bx * q4 + _2bz * q2) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q1 + _2bz * q3) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q2 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
+    recipNorm = AccurateInvSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3); // normalise step magnitude
+    s0 *= recipNorm;
+    s1 *= recipNorm;
+    s2 *= recipNorm;
+    s3 *= recipNorm;
 
-		// Apply feedback step
-		qDot1 -= beta * s0;
-		qDot2 -= beta * s1;
-		qDot3 -= beta * s2;
-		qDot4 -= beta * s3;
-	}
+    // Apply feedback step
+    qDot1 -= beta * s0;
+    qDot2 -= beta * s1;
+    qDot3 -= beta * s2;
+    qDot4 -= beta * s3;
+  }
 
-	// Integrate rate of change of quaternion to yield quaternion
-	q1 += qDot1 * deltat;
-	q2 += qDot2 * deltat;
-	q3 += qDot3 * deltat;
-	q4 += qDot4 * deltat;
+  // Integrate rate of change of quaternion to yield quaternion
+  q1 += qDot1 * deltat;
+  q2 += qDot2 * deltat;
+  q3 += qDot3 * deltat;
+  q4 += qDot4 * deltat;
 
-	// Normalise quaternion
-	recipNorm = AccurateInvSqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
+  // Normalise quaternion
+  recipNorm = AccurateInvSqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
         //recipNorm = 1. / sqrt(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
-	q1 *= recipNorm;
-	q2 *= recipNorm;
-	q3 *= recipNorm;
-	q4 *= recipNorm;
+  q1 *= recipNorm;
+  q2 *= recipNorm;
+  q3 *= recipNorm;
+  q4 *= recipNorm;
 }
 
 
@@ -1444,7 +1487,7 @@ void ComputeHeading(void)
   float iSin, iCos; /* sine and cosine */
   float iBpx, iBpy, iBpz, LocalPitch, LocalRoll;
   float iBfx, iBfy, iBfz;  // de rotated values of the mag sensors
-  	
+    
   // We work with the calibrated values of the MAG sensors
   // (hard iron offset removed)
   iBpx = mag_nobias[0];
@@ -1453,7 +1496,7 @@ void ComputeHeading(void)
 
   LocalRoll = roll;
   LocalPitch = pitch;
-	
+  
   iBpz = iBpz * -1.0;    // Z mag axis is inverted on the LSM9DS0
   
   /* calculate sin and cosine of roll angle Phi */
@@ -1465,11 +1508,11 @@ void ComputeHeading(void)
 
   /* calculate sin and cosine of pitch angle Theta */
   iSin = sin(LocalPitch);
-  iCos = cos(LocalPitch);	
+  iCos = cos(LocalPitch); 
   /* de-rotate by pitch angle Theta */
   iBfx = (iBpx * iCos) + (iBpz * iSin); /* Eq 19: x component */
   iBfz = (-iBpx * iSin) + (iBpz * iCos);/* Eq 19: z component */
-	
+  
   /* calculate current yaw/heading */
   heading = atan2(-iBfy, iBfx); /* Eq 22 */
   heading = (heading * 180.0) / PI;
@@ -1859,36 +1902,36 @@ void ProcessSerial(void)
   // Ping / Echo question/answer from the GUI
   else if(!strncmp("ping",StringBuffer,4))
   {
-    printf("echo\n");	// a simple ASCII echo answer to let the GUI know the COM port is the right one
+    printf("echo\n"); // a simple ASCII echo answer to let the GUI know the COM port is the right one
     return;
   }
 
-  else if(!strncmp("savecfg",StringBuffer,7))	// Saves config to FLASH
+  else if(!strncmp("savecfg",StringBuffer,7)) // Saves config to FLASH
   {
     SaveFlashPrefs();
     // Reboot is needed to use new settings
-    //Reboot();	
+    //Reboot(); 
   }
   
   else if(!strncmp(TEXT_WIFI_MODE,StringBuffer,4))
   {
     Index = SkipToValue(StringBuffer);
     sscanf(&StringBuffer[Index],"%d", &APorStation);
-    return;	
+    return; 
   }
   
   else if(!strncmp(TEXT_DHCP,StringBuffer,4))
   {
     Index = SkipToValue(StringBuffer);
     sscanf(&StringBuffer[Index],"%d", &UseDHCP);
-    return;	
+    return; 
   }
   else if(!strncmp(TEXT_SSID,StringBuffer,4))
   {
     Index = SkipToValue(StringBuffer);
     memset(ssid, '\0', sizeof(ssid));
     sscanf(&StringBuffer[Index],"%s", ssid);
-    return;	
+    return; 
   }
   else if(!strncmp(TEXT_OWNIP,StringBuffer,5))
   {
@@ -1897,37 +1940,37 @@ void ProcessSerial(void)
     ParseIP(&StringBuffer[Index], &LocalIP);
     //printf("own ip update %u.%u.%u.%u\n",pucIP_Addr[0], pucIP_Addr[1], pucIP_Addr[2], pucIP_Addr[3]);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_DESTIP,StringBuffer,6))
   {
     Index = SkipToValue(StringBuffer);
     ParseIP(&StringBuffer[Index], &DestIP);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_GATEWAY,StringBuffer,7))
   {
     Index = SkipToValue(StringBuffer);
     ParseIP(&StringBuffer[Index], &GatewayIP);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_DNS,StringBuffer,3))
   {
     Index = SkipToValue(StringBuffer);
     ParseIP(&StringBuffer[Index], &GatewayIP);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_MASK,StringBuffer,4))
   {
     Index = SkipToValue(StringBuffer);
     ParseIP(&StringBuffer[Index], &SubnetMask);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_PORT,StringBuffer,4))
   {
     Index = SkipToValue(StringBuffer);
     DestPort = atoi(&StringBuffer[Index]);
     return;
-  }	
+  } 
   else if(!strncmp(TEXT_MASTER_ID,StringBuffer,8))
   {
     Index = SkipToValue(StringBuffer);
@@ -1945,7 +1988,7 @@ void ProcessSerial(void)
       SampleRate = MAX_SAMPLE_RATE;
 
     return;
-  }	
+  } 
 
   else if(!strncmp(TEXT_ACC_OFFSETX,StringBuffer,11))
   {
@@ -2032,7 +2075,7 @@ void ProcessSerial(void)
       SerFlash.close();
       Serial.println("Please Reboot");
       while(1);
-    }	
+    } 
   }
 }
 
